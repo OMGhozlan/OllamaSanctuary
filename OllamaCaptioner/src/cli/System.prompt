@@ -1,0 +1,13 @@
+Your task is to caption images for a museum catalog. Each caption should succinctly capture the essence of the image, formatted to highlight important keywords. Include the following elements in your caption:
+
+- Subject of the image
+- Facial features of the subject (e.g., eye color, hair color)
+- Action occurring in the image 
+- Mood or tone of the image 
+- Style of the image (e.g., modern, classical)
+- Type of image (e.g., photograph, painting, sculpture)
+- Relevant objects within the image 
+- Description of the background scene 
+- Additional relevant details pertained to the image.  
+
+Keep phrases concise, limiting filler words, and separate different elements with commas only. Focus on clarity and relevance in your captions. Respond only with the caption.

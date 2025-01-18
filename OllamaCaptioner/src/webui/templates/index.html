@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OllamaCaptioner</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold text-center mb-4">OllamaCaptioner</h1>
+        <form id="captionForm" class="bg-white p-6 rounded shadow-md" enctype="multipart/form-data">
+            <div class="mb-4">
+                <label for="model" class="block text-gray-700">Select Model:</label>
+                <select id="model" name="model" class="mt-1 block w-full">
+                    <!-- Models will be populated here -->
+                </select>
+            </div>
+            <div class="mb-4">
+                <label for="prependText" class="block text-gray-700">Text to Prepend:</label>
+                <input type="text" id="prependText" name="prependText" class="mt-1 block w-full" />
+            </div>
+            <div class="mb-4">
+                <label for="images" class="block text-gray-700">Upload Images or Folder:</label>
+                <input type="file" id="images" name="images" accept="image/*" multiple class="mt-1 block w-full" />
+            </div>
+            <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">Generate Captions</button>
+        </form>
+        <div id="output" class="mt-6">
+            <h2 class="text-2xl font-bold">Generated Captions:</h2>
+            <table class="min-w-full bg-white">
+                <thead>
+                    <tr>
+                        <th class="py-2">File Name</th>
+                        <th class="py-2">Image</th>
+                        <th class="py-2">Caption</th>
+                    </tr>
+                </thead>
+                <tbody id="captionTableBody">
+                    <!-- Captions will be populated here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        async function fetchModels() {
+            const response = await fetch('/models');
+            const models = await response.json();
+            const modelSelect = document.getElementById('model');
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model;
+                option.textContent = model;
+                modelSelect.appendChild(option);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', fetchModels);
+
+        document.getElementById('captionForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            const response = await fetch('/generate_captions', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            const tableBody = document.getElementById('captionTableBody');
+            tableBody.innerHTML = '';
+            data.captions.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="py-2">${item.file_name}</td>
+                    <td class="py-2"><img src="${item.image_url}" alt="${item.file_name}" class="max-w-xs"></td>
+                    <td class="py-2">${item.caption}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        });
+    </script>
+</body>
+</html>
