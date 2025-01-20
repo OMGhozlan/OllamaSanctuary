@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 import pyfiglet
 from yaspin import yaspin
+from inquirer import list_input
 from difflib import get_close_matches
 
 from langchain_ollama import ChatOllama
@@ -40,7 +41,7 @@ def translate(llm, text, src_language, tgt_language):
         ),
         ("human", f'Translate this from {src_language} to {tgt_language}: {text}'),
     ]
-    return llm.invoke(messages)
+    return llm.invoke(messages).content
 
 
 
@@ -69,7 +70,7 @@ def check_model_if_exists(model_name):
         None. Raises an error if the model does not exist.
     """
     import ollama
-    model_names = [model['name'] for model in ollama.list()['models']]
+    model_names = [model['model'] for model in ollama.list()['models']]
 
     if model_name not in model_names:
         suggestions = get_close_matches(model_name, model_names, n=3)
@@ -160,7 +161,7 @@ def main(model_name="qwen2.5:7b", extension=".pdf"):
     prompt_files = [f for f in os.listdir('.') if os.path.isfile(f) and f.endswith(('.txt', '.prompt'))]
 
     if prompt_files:
-        prompt_file = Path(typer.prompt("Select the prompt file", type=typer.Choice(prompt_files)))
+        prompt_file = Path(list_input("Select the prompt file", choices=prompt_files))
         
         if not prompt_file.is_file():
             typer.echo("Invalid prompt file. Please try again.")
@@ -193,8 +194,10 @@ def main(model_name="qwen2.5:7b", extension=".pdf"):
 
     check_model_if_exists(model_name)
     doc = process_pdf(file_path, model_name, src_language, tgt_language)
-    doc.ez_save(f"{file_path.with_suffix(extension)}")
-    typer.echo(f"File saved to {file_path.with_suffix(extension)}")
+    output_file_path = f'{file_path.stem}_{src_language}-{tgt_language}'
+    output_file_path = file_path.with_name(f"{output_file_path}{file_path.suffix}")
+    doc.ez_save(output_file_path)
+    typer.echo(f"File saved to {output_file_path}")
 
 if __name__ == "__main__":
     app()
