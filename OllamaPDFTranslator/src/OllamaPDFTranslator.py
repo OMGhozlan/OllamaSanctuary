@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage
 app = typer.Typer()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 SYSTEM_PROMPT = ""
 
@@ -48,7 +48,7 @@ def translate(llm, text, src_language, tgt_language):
 def draw_target_text(page, block, ocg_xref, target):
     """
     Draw target translation in place of given block.
-    
+
     Args:
         page: The page object to draw on.
         block (tuple): The text block with its bounding box.
@@ -79,53 +79,111 @@ def check_model_if_exists(model_name):
         logging.error(suggestion_message)
         raise RuntimeError(suggestion_message)
 
-def process_pdf(file_path, model_name, src_language, tgt_language):
-    """Process a given PDF and translate it to a given language.
+def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
+    """Process a given PDF and translate it to a given language, splitting the PDF into smaller parts first.
 
     Args:
         file_path: Path to the PDF file.
-        prompt: Prompt for the captions.
         model_name: Name of the model to use.
-        ollama_client: Initialized Ollama client.
-        output_file: Path to the output PDF file (default: output.pdf).
+        src_language: Source language of the text.
+        tgt_language: Target language for translation.
+        n: Number of pages per smaller PDF file. If None, process the entire PDF as a single document.
     """
     logging.info(f"Processing {file_path}")
+    
+    # Open the original document
     doc = pymupdf.open(file_path)
     total_pages = len(doc)
 
     logging.info(f"Found {total_pages} pages in {file_path}")
 
+    # Folder to store the smaller PDFs
+    output_folder = Path("Original")
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # Split the document into smaller parts and save them
+    sub_pdf_paths = []
+    translated_sub_pdf_paths = [] 
+    
+    for start_page in range(0, total_pages, n):
+        sub_pdf_path = output_folder / f"{file_path.stem}_part{start_page // n + 1}.pdf"
+        sub_doc = pymupdf.open()  # New document for each part
+        sub_doc.insert_pdf(doc, from_page=start_page, to_page=min(start_page + n - 1, total_pages - 1))
+        sub_doc.save(sub_pdf_path)
+        sub_pdf_paths.append(sub_pdf_path)
+        logging.info(f"Saved sub-PDF: {sub_pdf_path}")
+
+    # Now process each sub-PDF
     start_time = time.time()
-    llm = ChatOllama(model=model_name, temperature=0, max_tokens=300)
+    llm = ChatOllama(model=model_name, temperature=0.5, num_predict=500)
 
     with yaspin(text="Processing pages", color="cyan") as spinner:
-        for idx, page in enumerate(doc):
-            spinner.text = f"Processing page {idx + 1}/{total_pages}"
-            blocks = page.get_text("blocks", flags=pymupdf.TEXT_DEHYPHENATE)
-            ocg_xref = doc.add_ocg(f"{tgt_language.capitalize()}", on=True)
-            for block in blocks:
-                try:
-                    text = block[4]
-                    # target = translate(prompt, model_name, ollama_client)
-                    target = translate(llm, text, src_language, tgt_language)
-                    if "Error" in target:
-                        logging.error(target)
-                    else:
-                        draw_target_text(page, block, ocg_xref, target)
-                except Exception as e:
-                    logging.error(f"Error processing page {idx + 1}: {e}")
+        for sub_pdf_path in sub_pdf_paths:
+            sub_doc = pymupdf.open(sub_pdf_path)
+            sub_total_pages = len(sub_doc)
+            logging.info(f"Processing sub-PDF: {sub_pdf_path} with {sub_total_pages} pages")
+            
+            # Process each page in the sub-PDF
+            for idx, page in enumerate(sub_doc):
+                spinner.text = f"Processing page {idx + 1}/{sub_total_pages} of {sub_pdf_path}"
+                blocks = page.get_text("blocks", flags=pymupdf.TEXT_DEHYPHENATE)
+                ocg_xref = sub_doc.add_ocg(f"{tgt_language.capitalize()}", on=True)
+                
+                for block in blocks:
+                    try:
+                        text = block[4]
+                        target = translate(llm, text, src_language, tgt_language)
+                        if "Error" in target:
+                            logging.error(target)
+                        else:
+                            draw_target_text(page, block, ocg_xref, target)
+                    except Exception as e:
+                        logging.error(f"Error processing page {idx + 1}: {e}")
 
-            elapsed_time = time.time() - start_time
-            avg_time_per_page = elapsed_time / (idx + 1)
-            estimated_total_time = avg_time_per_page * total_pages
-            estimated_time_left = estimated_total_time - elapsed_time
+                elapsed_time = time.time() - start_time
+                avg_time_per_page = elapsed_time / (idx + 1)
+                estimated_total_time = avg_time_per_page * sub_total_pages
+                estimated_time_left = estimated_total_time - elapsed_time
 
-            spinner.text = (f"{100 * (idx + 1) / total_pages:.2f}% complete - "
-                            f"Elapsed: {elapsed_time:.2f}s, "
-                            f"ETA: {estimated_time_left:.2f}s")
+                spinner.text = (f"{100 * (idx + 1) / sub_total_pages:.2f}% complete - "
+                                f"Elapsed: {elapsed_time:.2f}s, "
+                                f"ETA: {estimated_time_left:.2f}s")
 
+            # After processing each sub-PDF, save the translated version
+            translated_sub_pdf_path = sub_pdf_path.with_name(f"{sub_pdf_path.stem}_translated.pdf")
+            sub_doc.save(translated_sub_pdf_path)
+            translated_sub_pdf_paths.append(translated_sub_pdf_path)
+            logging.info(f"Saved translated sub-PDF: {translated_sub_pdf_path}")
+            
+    # Merge all translated sub-PDFs into one final PDF
+    merged_pdf = pymupdf.open()  # Start with a new blank PDF document
+    for translated_sub_pdf_path in translated_sub_pdf_paths:
+        translated_sub_doc = pymupdf.open(translated_sub_pdf_path)
+        merged_pdf.insert_pdf(translated_sub_doc)  # Insert pages from each translated sub-PDF
+
+    # Define the merged output path
+    merged_output_path = Path(f"{file_path.stem}_translated_merged.pdf")
+    merged_pdf.save(merged_output_path)
+
+    # After merging, delete the translated sub-PDFs and original sub-PDFs
+    for sub_pdf_path in sub_pdf_paths:
+        logging.info(f"Deleting original sub-PDF: {sub_pdf_path}")
+        os.remove(sub_pdf_path)
+    
+    for translated_sub_pdf_path in translated_sub_pdf_paths:
+        logging.info(f"Deleting translated sub-PDF: {translated_sub_pdf_path}")
+        os.remove(translated_sub_pdf_path)
+
+    # After merging, delete the "Original" folder if empty
+    if not os.listdir(output_folder):
+        os.rmdir(output_folder)
+
+    logging.info(f"Merged translated PDF saved to: {merged_output_path}")
+    logging.info("Processing completed!")
+    
     doc.subset_fonts()
     return doc
+
 
 def is_ollama_running():
     try:
@@ -162,7 +220,7 @@ def main(model_name="qwen2.5:7b", extension=".pdf"):
 
     if prompt_files:
         prompt_file = Path(list_input("Select the prompt file", choices=prompt_files))
-        
+
         if not prompt_file.is_file():
             typer.echo("Invalid prompt file. Please try again.")
             raise typer.Exit()
@@ -192,8 +250,11 @@ def main(model_name="qwen2.5:7b", extension=".pdf"):
     src_language = typer.prompt("Enter the source language code (e.g. English)")
     tgt_language = typer.prompt("Enter the target language code (e.g. Deutsch)")
 
+    n = typer.prompt("Enter the number of pages per smaller PDF file (leave blank for entire document)", default=None)
+    n = int(n) if n else None
+
     check_model_if_exists(model_name)
-    doc = process_pdf(file_path, model_name, src_language, tgt_language)
+    doc = process_pdf(file_path, model_name, src_language, tgt_language, n)
     output_file_path = f'{file_path.stem}_{src_language}-{tgt_language}'
     output_file_path = file_path.with_name(f"{output_file_path}{file_path.suffix}")
     doc.ez_save(output_file_path)
