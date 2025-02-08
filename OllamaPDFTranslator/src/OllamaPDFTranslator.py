@@ -55,10 +55,13 @@ def draw_target_text(page, block, ocg_xref, target):
         ocg_xref: The optional content group reference.
     """
     bbox = block[:4]
-    page.draw_rect(bbox, color=None, fill=pymupdf.pdfcolor["white"], oc=ocg_xref)
+    # page.draw_rect(bbox, color=None, fill=pymupdf.pdfcolor["white"], oc=ocg_xref)
     page.insert_htmlbox(
-        bbox, target, css="* {font-family: sans-serif;}", oc=ocg_xref
+        bbox, target, css="* {font-family: sans-serif; font-size: 9pt;}", oc=ocg_xref
     )
+    # page.insert_textbox(
+    #     bbox, target, fontsize=9, oc=ocg_xref
+    # )
 
 def check_model_if_exists(model_name):
     """Check if the specified model exists.
@@ -98,7 +101,7 @@ def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
     logging.info(f"Found {total_pages} pages in {file_path}")
 
     # Folder to store the smaller PDFs
-    output_folder = Path("Original")
+    output_folder = Path("WorkingSet")
     output_folder.mkdir(parents=True, exist_ok=True)
 
     # Split the document into smaller parts and save them
@@ -115,28 +118,46 @@ def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
 
     # Now process each sub-PDF
     start_time = time.time()
-    llm = ChatOllama(model=model_name, temperature=0.5, num_predict=500)
+    llm = ChatOllama(model=model_name, temperature=0.25, num_predict=500)
 
     with yaspin(text="Processing pages", color="cyan") as spinner:
         for sub_pdf_path in sub_pdf_paths:
             sub_doc = pymupdf.open(sub_pdf_path)
             sub_total_pages = len(sub_doc)
+            clean_doc = pymupdf.open()
             logging.info(f"Processing sub-PDF: {sub_pdf_path} with {sub_total_pages} pages")
             
             # Process each page in the sub-PDF
             for idx, page in enumerate(sub_doc):
                 spinner.text = f"Processing page {idx + 1}/{sub_total_pages} of {sub_pdf_path}"
-                blocks = page.get_text("blocks", flags=pymupdf.TEXT_DEHYPHENATE)
-                ocg_xref = sub_doc.add_ocg(f"{tgt_language.capitalize()}", on=True)
+                text_blocks = page.get_text("blocks", flags=pymupdf.TEXT_DEHYPHENATE)
+                image_list = page.get_images(full=True)
+                new_page = clean_doc.new_page(width=page.rect.x1, height=page.rect.y1)
+                ocg_xref = clean_doc.add_ocg(f"{tgt_language.capitalize()}", on=True)
                 
-                for block in blocks:
+                for img in image_list:
+                    xref = img[0]
+                    base_image = sub_doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    bbox = page.get_image_bbox(img)
+                    try:
+                        new_page.insert_image(bbox, stream=image_bytes)
+                    except pymupdf.mupdf.FzErrorFormat as FzFE:  
+                        logging.error(f"Error inserting image using byte-stream: {FzFE}\n Attempting to insert using pixmap.")
+                        try:
+                            img_pixmap = pymupdf.Pixmap(image_bytes)
+                            new_page.insert_image(bbox, pixmap=img_pixmap)
+                        except Exception as e:
+                            logging.error(f"Error inserting image: {e}")
+                
+                for block in text_blocks:
                     try:
                         text = block[4]
                         target = translate(llm, text, src_language, tgt_language)
                         if "Error" in target:
                             logging.error(target)
                         else:
-                            draw_target_text(page, block, ocg_xref, target)
+                            draw_target_text(new_page, block, ocg_xref, target)
                     except Exception as e:
                         logging.error(f"Error processing page {idx + 1}: {e}")
 
@@ -151,7 +172,8 @@ def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
 
             # After processing each sub-PDF, save the translated version
             translated_sub_pdf_path = sub_pdf_path.with_name(f"{sub_pdf_path.stem}_translated.pdf")
-            sub_doc.save(translated_sub_pdf_path)
+            clean_doc.subset_fonts()
+            clean_doc.save(translated_sub_pdf_path, garbage=4, deflate=True)
             translated_sub_pdf_paths.append(translated_sub_pdf_path)
             logging.info(f"Saved translated sub-PDF: {translated_sub_pdf_path}")
             
@@ -163,7 +185,8 @@ def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
 
     # Define the merged output path
     merged_output_path = Path(f"{file_path.stem}_translated_merged.pdf")
-    merged_pdf.save(merged_output_path)
+    merged_pdf.subset_fonts()
+    merged_pdf.save(merged_output_path, garbage=4, deflate=True)
 
     # After merging, delete the translated sub-PDFs and original sub-PDFs
     for sub_pdf_path in sub_pdf_paths:
@@ -174,7 +197,7 @@ def process_pdf(file_path, model_name, src_language, tgt_language, n=10):
         logging.info(f"Deleting translated sub-PDF: {translated_sub_pdf_path}")
         os.remove(translated_sub_pdf_path)
 
-    # After merging, delete the "Original" folder if empty
+    # After merging, delete the working folder if empty
     if not os.listdir(output_folder):
         os.rmdir(output_folder)
 
